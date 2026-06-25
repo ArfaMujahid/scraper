@@ -19,7 +19,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # Latest stable (not the go.mod minimum) so the toolchain stdlib is
+          # security-patched — govulncheck flags CVEs in older stdlib versions.
+          go-version: stable
           cache: true
 
       - name: Add Go bin to PATH
