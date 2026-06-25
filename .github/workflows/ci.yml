@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Standards gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Latest stable (not the go.mod minimum) so the toolchain stdlib is
+          # security-patched — govulncheck flags CVEs in older stdlib versions.
+          go-version: stable
+          cache: true
+
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install tools
+        run: make tools
+
+      # gofmt, goimports, go vet, golangci-lint, govulncheck, build, test -race
+      - name: Run gate
+        run: make check
+
+      - name: go.mod tidy check
+        run: make tidy-check

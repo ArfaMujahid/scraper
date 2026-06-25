@@ -8,3 +8,8 @@ go 1.23
 //   golang.org/x/sync/errgroup       — coordinated goroutines (crawler)
 //   github.com/google/uuid           — job + session IDs (job, web)
 //   github.com/temoto/robotstxt      — robots.txt parsing (ratelimit)
+
+require (
+	github.com/google/go-cmp v0.7.0
+	github.com/google/uuid v1.6.0
+)
