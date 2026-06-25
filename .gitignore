@@ -1,0 +1,16 @@
+# Compiled binary
+/scraper
+*.exe
+
+# Runtime output root (created at startup)
+/data/
+
+# Test / profiling artifacts
+*.test
+*.out
+*.prof
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
