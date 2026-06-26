@@ -170,3 +170,24 @@ func NewForJob(j *job.Job, format string) (Writer, io.Closer, error) {
 	}
 	return w, f, nil
 }
+
+// WriteAll encodes results to w in the given format (jsonl or csv), flushing on
+// completion. Used to serve a job's records in a format other than the one it
+// was written in on disk.
+func WriteAll(w io.Writer, format string, results []model.Result) error {
+	var ow Writer
+	switch format {
+	case formatCSV:
+		ow = NewCSV(w)
+	case formatJSONL:
+		ow = NewJSONL(w)
+	default:
+		return fmt.Errorf("output: unknown format %q", format)
+	}
+	for _, r := range results {
+		if err := ow.Write(r); err != nil {
+			return err
+		}
+	}
+	return ow.Close()
+}

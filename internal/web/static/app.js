@@ -39,13 +39,20 @@ function streamJob(id) {
     if (f.status === "done" || f.status === "failed") {
       es.close();
       currentStream = null;
-      const dl = $("download");
-      dl.href = "/api/download?job=" + encodeURIComponent(id);
-      dl.hidden = false;
+      showDownloads(id);
       refreshJobs();
     }
   };
   es.onerror = () => { es.close(); currentStream = null; };
+}
+
+// showDownloads points the JSONL/CSV download links at the finished job.
+function showDownloads(id) {
+  const box = $("downloads");
+  box.querySelectorAll("a.download").forEach((a) => {
+    a.href = "/api/download?job=" + encodeURIComponent(id) + "&format=" + a.dataset.fmt;
+  });
+  box.hidden = false;
 }
 
 // renderFeed paints the most-recent-first list of scraped pages.
@@ -121,7 +128,7 @@ document.addEventListener("DOMContentLoaded", () => {
     msg.textContent = "Starting…";
     try {
       renderFeed([]);
-      $("download").hidden = true;
+      $("downloads").hidden = true;
       ["m-done", "m-inflight", "m-errors"].forEach((k) => ($(k).textContent = "0"));
       const id = await startScrape(seeds, maxPages);
       msg.textContent = "Started.";

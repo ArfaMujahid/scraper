@@ -81,13 +81,15 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   text-transform: uppercase;
   letter-spacing: .04em;
 }
+.downloads { display: inline-flex; align-items: center; gap: .5rem; }
+.dl-label { color: var(--muted); font-size: .78rem; }
 .download {
-  font-size: .82rem;
+  font-size: .8rem;
   font-weight: 600;
   color: var(--accent);
   text-decoration: none;
   background: rgba(56,189,248,.12);
-  padding: .35rem .8rem;
+  padding: .3rem .7rem;
   border-radius: 8px;
 }
 .download:hover { background: rgba(56,189,248,.22); }

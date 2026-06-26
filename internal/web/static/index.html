@@ -29,7 +29,11 @@
       <h2>Live progress</h2>
       <div class="status-row">
         <span id="live-status" class="status idle">idle</span>
-        <a id="download" class="download" href="#" hidden download>⬇ Download results</a>
+        <span id="downloads" class="downloads" hidden>
+          <span class="dl-label">Download:</span>
+          <a class="download" data-fmt="jsonl" href="#" download>⬇ JSONL</a>
+          <a class="download" data-fmt="csv" href="#" download>⬇ CSV</a>
+        </span>
       </div>
       <div class="metrics">
         <div class="metric"><span class="num" id="m-done">0</span><span class="lbl">pages done</span></div>

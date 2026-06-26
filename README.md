@@ -75,7 +75,9 @@ for that scrape, click **Start scrape**, and watch live —
 - **metrics**: pages done, in-flight, errors, pages/sec, KB, elapsed;
 - **scraped content**: a feed of each page as it's fetched (status, title, URL);
 - **your jobs**: the list of scrapes from your session;
-- when a job finishes, a **Download results** button serves its full output file.
+- when a job finishes, **Download** buttons offer the full results as **JSONL or
+  CSV** (the file is converted on the fly, regardless of which format it was
+  scraped in).
 
 Each browser gets an anonymous session cookie and sees (and downloads) only its
 own jobs — open a second browser (or incognito window) to see two isolated users

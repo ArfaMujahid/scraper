@@ -233,6 +233,31 @@ func TestDownloadServesOutput(t *testing.T) {
 	}
 }
 
+func TestDownloadConvertsFormat(t *testing.T) {
+	srv := newTestServer(t, true) // writes a JSONL output file
+	c := newClient(t)
+
+	var created map[string]string
+	decodeJSON(t, startScrape(t, c, srv.URL, []string{"http://example.com"}), &created)
+
+	// Native is jsonl; request csv → server converts on the fly.
+	res, err := c.Get(srv.URL + "/api/download?job=" + created["job"] + "&format=csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("download?format=csv status = %d, want 200", res.StatusCode)
+	}
+	if cd := res.Header.Get("Content-Disposition"); !strings.Contains(cd, ".csv") {
+		t.Errorf("expected a .csv filename, got %q", cd)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if !strings.HasPrefix(string(body), "url,status_code,") {
+		t.Errorf("expected CSV header, got: %q", body)
+	}
+}
+
 func TestDownloadIsolatedByOwner(t *testing.T) {
 	srv := newTestServer(t, true)
 	alice := newClient(t)
