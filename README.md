@@ -8,6 +8,18 @@ serves its own **embedded live dashboard** where multiple anonymous users each
 run isolated scrapes and watch progress — and the scraped content — in real
 time.
 
+## Demo
+
+![Live crawl on the dashboard](docs/demo.gif)
+
+*Scraping a 250-page catalog from the dashboard — live throughput, in-flight workers, and a scrolling feed of results.*
+
+▶ **[Watch the full walkthrough (muted)](docs/demo.mp4)**
+
+| Completed crawl | Scraped content |
+| :---: | :---: |
+| ![Dashboard after a crawl](docs/dashboard.png) | ![Scraped-content feed](docs/scraped-content.png) |
+
 ## What it does
 
 - **Bounded concurrency** — a fixed worker pool, never goroutine-per-URL, so it
