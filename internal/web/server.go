@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/ArfaMujahid/scraper/internal/job"
 	"github.com/ArfaMujahid/scraper/internal/model"
+	"github.com/ArfaMujahid/scraper/internal/output"
 	"github.com/ArfaMujahid/scraper/internal/registry"
 	"github.com/ArfaMujahid/scraper/internal/stats"
 )
@@ -145,7 +147,9 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, out)
 }
 
-// handleDownload serves the owner's job output file as an attachment. The path
+// handleDownload serves the owner's job output as an attachment in the requested
+// format (?format=jsonl|csv, default the job's native format). When the format
+// differs from what's on disk, the file is read back and re-encoded. The path
 // comes from the registry (server-generated, owner-sanitized), never from user
 // input, and the owner check enforces isolation.
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -160,8 +164,52 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "job not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(j.OutputPath)+`"`)
-	http.ServeFile(w, r, j.OutputPath)
+
+	native := strings.TrimPrefix(filepath.Ext(j.OutputPath), ".")
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = native
+	}
+	if format != "jsonl" && format != "csv" {
+		http.Error(w, "unsupported format (use jsonl or csv)", http.StatusBadRequest)
+		return
+	}
+
+	base := strings.TrimSuffix(filepath.Base(j.OutputPath), filepath.Ext(j.OutputPath))
+	w.Header().Set("Content-Disposition", `attachment; filename="`+base+"."+format+`"`)
+
+	// Same format as on disk → serve the file as-is.
+	if format == native {
+		http.ServeFile(w, r, j.OutputPath)
+		return
+	}
+
+	// Otherwise read the native records and re-encode to the requested format.
+	file, err := os.Open(j.OutputPath)
+	if err != nil {
+		http.Error(w, "job output not available", http.StatusNotFound)
+		return
+	}
+	defer func() { _ = file.Close() }()
+
+	results, err := output.ReadAll(file, native)
+	if err != nil {
+		s.logger.Warn("web: reading job output for conversion", "job", id, "err", err)
+		http.Error(w, "could not read job output", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", contentTypeFor(format))
+	if err := output.WriteAll(w, format, results); err != nil {
+		s.logger.Warn("web: encoding download", "job", id, "err", err)
+	}
+}
+
+// contentTypeFor returns the MIME type for an output format.
+func contentTypeFor(format string) string {
+	if format == "csv" {
+		return "text/csv; charset=utf-8"
+	}
+	return "application/x-ndjson"
 }
 
 // eventFrame is one SSE payload: job status plus a stats snapshot, in the wire
