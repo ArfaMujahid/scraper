@@ -114,3 +114,31 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .badge.done    { background: rgba(74,222,128,.15); color: var(--green); }
 .badge.failed  { background: rgba(248,113,113,.15); color: var(--red); }
 .badge.queued  { background: rgba(251,191,36,.15); color: var(--amber); }
+
+.count { color: var(--muted); font-size: .8rem; font-weight: 400; }
+
+.feed { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; max-height: 320px; overflow-y: auto; }
+.feed li.empty { color: var(--muted); text-align: center; padding: .5rem; }
+.feed-item {
+  display: grid;
+  grid-template-columns: 3rem 1fr;
+  grid-template-areas: "code title" "code url";
+  gap: 0 .6rem;
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: .45rem .65rem;
+  font-size: .82rem;
+}
+.feed-item .code {
+  grid-area: code;
+  align-self: center;
+  text-align: center;
+  font-weight: 700;
+  font-size: .72rem;
+  padding: .2rem 0;
+  border-radius: 6px;
+}
+.feed-item .code.ok  { background: rgba(74,222,128,.15); color: var(--green); }
+.feed-item .code.err { background: rgba(248,113,113,.15); color: var(--red); }
+.feed-item .ftitle { grid-area: title; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed-item .furl { grid-area: url; color: var(--muted); font-family: ui-monospace, monospace; font-size: .75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -36,26 +36,8 @@ var _ Fetcher = (*fetcher.Client)(nil)
 type Config struct {
 	Workers   int
 	MaxDepth  int
+	MaxPages  int // cap on total pages fetched; 0 = unlimited
 	Selectors map[string]string
-}
-
-// EventType classifies a progress Event.
-type EventType int
-
-const (
-	// EventPageDone is emitted after a page is successfully scraped.
-	EventPageDone EventType = iota
-	// EventPageError is emitted after a page fails (recorded, not fatal).
-	EventPageError
-)
-
-// Event is a progress signal emitted for the stats/UI layer (fan-out). The same
-// engine drives the CLI and, later, the dashboard.
-type Event struct {
-	Type  EventType
-	URL   string
-	Bytes int
-	Err   error
 }
 
 // Crawler runs a single scrape job using a bounded worker pool.
@@ -65,12 +47,12 @@ type Crawler struct {
 	limiter *ratelimit.Limiter
 	writer  output.Writer
 	stats   *stats.Stats
-	events  chan<- Event // may be nil (headless): emit is then a no-op
+	events  chan<- model.Event // may be nil (headless): emit is then a no-op
 }
 
 // New wires a Crawler with its collaborators. A nil events channel disables
 // progress emission (headless mode).
-func New(cfg Config, f Fetcher, l *ratelimit.Limiter, w output.Writer, s *stats.Stats, events chan<- Event) *Crawler {
+func New(cfg Config, f Fetcher, l *ratelimit.Limiter, w output.Writer, s *stats.Stats, events chan<- model.Event) *Crawler {
 	if cfg.Workers < 1 {
 		cfg.Workers = 1
 	}
@@ -148,16 +130,23 @@ func (c *Crawler) Run(ctx context.Context, seeds []string) error {
 	}
 }
 
-// coordinate owns the frontier (as a stack), the visited set, and the in-flight
-// counter. It feeds work to the pool and consumes discovered links, finishing
-// when the frontier is empty and nothing is outstanding. The send case is
-// disabled (nil channel) when the frontier is empty so the select can't spin.
+// coordinate owns the frontier (as a stack) and the visited set. It dispatches
+// work and consumes discovered links, finishing when nothing is in flight and
+// either the frontier is empty or the page cap is reached.
+//
+//   - pending  = pages dispatched to workers but not yet reported back
+//   - dispatched = total pages handed out (the page-count cap, MaxPages)
+//
+// Dispatch is disabled (nil send channel) when the frontier is empty or the cap
+// is reached, so the select never spins and an infinite-link trap is bounded by
+// MaxPages and MaxDepth.
 func (c *Crawler) coordinate(ctx context.Context, seeds []string, work chan<- item, discovered <-chan discoveredMsg) {
 	defer close(work)
 
 	visited := make(map[string]struct{})
 	var frontier []item
-	inFlight := 0
+	pending := 0
+	dispatched := 0
 
 	for _, s := range seeds {
 		if _, ok := visited[s]; ok {
@@ -165,17 +154,17 @@ func (c *Crawler) coordinate(ctx context.Context, seeds []string, work chan<- it
 		}
 		visited[s] = struct{}{}
 		frontier = append(frontier, item{url: s, depth: 0})
-		inFlight++
 	}
 
 	for {
-		if len(frontier) == 0 && inFlight == 0 {
+		capReached := c.cfg.MaxPages > 0 && dispatched >= c.cfg.MaxPages
+		if pending == 0 && (len(frontier) == 0 || capReached) {
 			return
 		}
 
 		var sendCh chan<- item
 		var next item
-		if n := len(frontier); n > 0 {
+		if n := len(frontier); n > 0 && !capReached {
 			sendCh = work
 			next = frontier[n-1]
 		}
@@ -185,8 +174,10 @@ func (c *Crawler) coordinate(ctx context.Context, seeds []string, work chan<- it
 			return
 		case sendCh <- next:
 			frontier = frontier[:len(frontier)-1]
+			pending++
+			dispatched++
 		case d := <-discovered:
-			inFlight--
+			pending--
 			if d.depth+1 > c.cfg.MaxDepth {
 				continue
 			}
@@ -196,7 +187,6 @@ func (c *Crawler) coordinate(ctx context.Context, seeds []string, work chan<- it
 				}
 				visited[link] = struct{}{}
 				frontier = append(frontier, item{url: link, depth: d.depth + 1})
-				inFlight++
 			}
 		}
 	}
@@ -257,10 +247,11 @@ func (c *Crawler) scrape(ctx context.Context, it item, results chan<- model.Resu
 		links = nil // base was fetched, so this is unexpected; degrade gracefully
 	}
 
+	title := doc.Title()
 	r := model.Result{
 		URL:        it.url,
 		StatusCode: resp.StatusCode,
-		Title:      doc.Title(),
+		Title:      title,
 		Data:       doc.Data(c.cfg.Selectors),
 		Links:      links,
 		Depth:      it.depth,
@@ -270,7 +261,7 @@ func (c *Crawler) scrape(ctx context.Context, it item, results chan<- model.Resu
 		return nil, err
 	}
 	c.stats.IncDone()
-	c.emit(Event{Type: EventPageDone, URL: it.url, Bytes: len(resp.Body)})
+	c.emit(model.Event{Type: model.EventPageDone, URL: it.url, Title: title, StatusCode: resp.StatusCode, Bytes: len(resp.Body)})
 	return links, nil
 }
 
@@ -288,7 +279,7 @@ func (c *Crawler) fail(ctx context.Context, it item, now time.Time, status int, 
 		return err
 	}
 	c.stats.IncError()
-	c.emit(Event{Type: EventPageError, URL: it.url, Err: srcErr})
+	c.emit(model.Event{Type: model.EventPageError, URL: it.url, StatusCode: status, Err: srcErr})
 	return nil
 }
 
@@ -306,7 +297,7 @@ func (c *Crawler) send(ctx context.Context, results chan<- model.Result, r model
 // emit publishes a progress Event without ever blocking the hot path: if there
 // is no consumer or its buffer is full, the event is dropped (NFR-P3). Stats are
 // updated directly, so dropped events never affect the numbers.
-func (c *Crawler) emit(ev Event) {
+func (c *Crawler) emit(ev model.Event) {
 	if c.events == nil {
 		return
 	}

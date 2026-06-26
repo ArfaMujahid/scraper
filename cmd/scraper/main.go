@@ -22,6 +22,7 @@ import (
 	"github.com/ArfaMujahid/scraper/internal/crawler"
 	"github.com/ArfaMujahid/scraper/internal/fetcher"
 	"github.com/ArfaMujahid/scraper/internal/job"
+	"github.com/ArfaMujahid/scraper/internal/model"
 	"github.com/ArfaMujahid/scraper/internal/output"
 	"github.com/ArfaMujahid/scraper/internal/ratelimit"
 	"github.com/ArfaMujahid/scraper/internal/registry"
@@ -43,6 +44,7 @@ func run() int {
 
 	flag.StringVar(&seedsCSV, "seeds", "", "comma-separated seed URLs (or pass as positional args)")
 	flag.IntVar(&cfg.MaxDepth, "depth", cfg.MaxDepth, "max crawl depth (0 = seeds only)")
+	flag.IntVar(&cfg.MaxPages, "max-pages", cfg.MaxPages, "max pages to fetch per job (0 = unlimited)")
 	flag.IntVar(&cfg.Workers, "workers", cfg.Workers, "number of concurrent workers")
 	flag.Float64Var(&cfg.RatePerHost, "rate", cfg.RatePerHost, "max requests per second per host")
 	flag.DurationVar(&cfg.Timeout, "timeout", cfg.Timeout, "per-request timeout")
@@ -109,6 +111,7 @@ func runHeadless(ctx context.Context, cfg config.Config, logger *slog.Logger) er
 	cr := crawler.New(crawler.Config{
 		Workers:   cfg.Workers,
 		MaxDepth:  cfg.MaxDepth,
+		MaxPages:  cfg.MaxPages,
 		Selectors: cfg.Selectors,
 	}, f, limiter, w, st, nil)
 
@@ -141,13 +144,15 @@ func runUI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// startJob launches one crawl per request on the server-lifetime context, so
 	// a finished HTTP request never cancels its scrape. web stays free of any
 	// crawler import via this closure.
-	startJob := func(owner job.OwnerID, seeds []string) (*job.Job, *stats.Stats) {
+	startJob := func(owner job.OwnerID, seeds []string) (*job.Job, *stats.Stats, <-chan model.Event) {
 		j := job.New(owner, seeds, cfg.DataDir, cfg.Format)
 		st := stats.New()
+		events := make(chan model.Event, 256)
 		reg.Add(j)
 		reg.SetRunning(j.Owner, j.ID)
 
 		go func() {
+			defer close(events) // signals the dashboard feed consumer to stop
 			w, file, err := output.NewForJob(j, cfg.Format)
 			if err != nil {
 				logger.Error("ui: opening output", "job", j.ID, "err", err)
@@ -162,8 +167,9 @@ func runUI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			cr := crawler.New(crawler.Config{
 				Workers:   cfg.Workers,
 				MaxDepth:  cfg.MaxDepth,
+				MaxPages:  cfg.MaxPages,
 				Selectors: cfg.Selectors,
-			}, f, limiter, w, st, nil)
+			}, f, limiter, w, st, events)
 
 			if err := cr.Run(ctx, seeds); err != nil && !errors.Is(err, context.Canceled) {
 				reg.SetFailed(j.Owner, j.ID, err)
@@ -172,7 +178,7 @@ func runUI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			reg.SetDone(j.Owner, j.ID)
 		}()
 
-		return j, st
+		return j, st, events
 	}
 
 	srv := &http.Server{

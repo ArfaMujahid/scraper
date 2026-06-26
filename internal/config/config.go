@@ -17,6 +17,7 @@ import (
 // Default values, exported so cmd/scraper can advertise them in --help.
 const (
 	DefaultMaxDepth      = 2
+	DefaultMaxPages      = 10 // cap on total pages per job (0 = unlimited)
 	DefaultWorkers       = 10
 	DefaultRatePerHost   = 1.0 // requests/sec per host — polite by default
 	DefaultTimeout       = 30 * time.Second
@@ -43,6 +44,7 @@ type Config struct {
 	// crawl
 	Seeds         []string
 	MaxDepth      int               // 0 = seeds only (FR-2)
+	MaxPages      int               // cap on total pages per job; 0 = unlimited
 	Workers       int               // bounded worker-pool size (FR-3)
 	RatePerHost   float64           // requests/sec per host (FR-5)
 	Timeout       time.Duration     // per-request timeout
@@ -69,6 +71,7 @@ type Config struct {
 func Default() Config {
 	return Config{
 		MaxDepth:      DefaultMaxDepth,
+		MaxPages:      DefaultMaxPages,
 		Workers:       DefaultWorkers,
 		RatePerHost:   DefaultRatePerHost,
 		Timeout:       DefaultTimeout,
@@ -93,6 +96,7 @@ var (
 	ErrUIAddr        = errors.New("config: ui address must not be empty when the UI is enabled")
 	ErrWorkers       = errors.New("config: workers must be greater than 0")
 	ErrMaxDepth      = errors.New("config: max depth must be 0 or greater")
+	ErrMaxPages      = errors.New("config: max pages must be 0 or greater")
 	ErrRatePerHost   = errors.New("config: rate per host must be greater than 0")
 	ErrTimeout       = errors.New("config: timeout must be greater than 0")
 	ErrRetries       = errors.New("config: retries must be 0 or greater")
@@ -130,6 +134,9 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxDepth < 0 {
 		errs = append(errs, ErrMaxDepth)
+	}
+	if c.MaxPages < 0 {
+		errs = append(errs, ErrMaxPages)
 	}
 	if c.RatePerHost <= 0 {
 		errs = append(errs, ErrRatePerHost)

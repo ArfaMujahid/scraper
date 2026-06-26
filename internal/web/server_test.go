@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ArfaMujahid/scraper/internal/job"
+	"github.com/ArfaMujahid/scraper/internal/model"
 	"github.com/ArfaMujahid/scraper/internal/registry"
 	"github.com/ArfaMujahid/scraper/internal/stats"
 )
@@ -24,7 +25,7 @@ func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Disca
 func newTestServer(t *testing.T, markDone bool) *httptest.Server {
 	t.Helper()
 	reg := registry.New()
-	start := func(owner job.OwnerID, seeds []string) (*job.Job, *stats.Stats) {
+	start := func(owner job.OwnerID, seeds []string) (*job.Job, *stats.Stats, <-chan model.Event) {
 		j := job.New(owner, seeds, "data", "jsonl")
 		st := stats.New()
 		reg.Add(j)
@@ -32,7 +33,9 @@ func newTestServer(t *testing.T, markDone bool) *httptest.Server {
 		if markDone {
 			reg.SetDone(j.Owner, j.ID)
 		}
-		return j, st
+		events := make(chan model.Event)
+		close(events) // no live events in the fake; consumer exits immediately
+		return j, st, events
 	}
 	srv := httptest.NewServer(New(reg, start, time.Hour, discardLogger()).Handler())
 	t.Cleanup(srv.Close)

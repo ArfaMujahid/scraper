@@ -1,43 +1,95 @@
 # Concurrent Web Scraper
 
-A configurable, polite, concurrent web scraper in Go — a single static binary
-that crawls thousands of pages concurrently, respects `robots.txt` and per-host
-rate limits, extracts links and CSS-selector data, and streams structured output
-(JSON Lines or CSV). It runs **headless** for real jobs or serves its own
-**embedded live dashboard** where multiple anonymous users each run isolated
-scrapes.
+A configurable, polite, concurrent web scraper written in Go — a single static
+binary that crawls pages concurrently, respects `robots.txt` and per-host rate
+limits, extracts links and CSS-selector data, and streams structured output
+(JSON Lines or CSV). It runs **headless** for real jobs (cron-friendly) or
+serves its own **embedded live dashboard** where multiple anonymous users each
+run isolated scrapes and watch progress — and the scraped content — in real
+time.
 
-## Quick start
+## What it does
+
+- **Bounded concurrency** — a fixed worker pool, never goroutine-per-URL, so it
+  scales without DoS-ing the target or itself.
+- **Polite by default** — obeys `robots.txt` and a per-host rate limit; different
+  hosts are crawled in parallel at full speed.
+- **Safe crawling** — deduplicates URLs, caps crawl size with `--depth` and
+  `--max-pages` (so infinite-link traps terminate), and caps each response body.
+- **Structured output** — one file per job (`JSONL` or `CSV`), streamed to disk
+  as it goes (constant memory; a crash leaves a valid partial file).
+- **Two modes** — a headless CLI and a live web dashboard, driven by the same
+  engine.
+- **Graceful shutdown** — `Ctrl-C`/`SIGTERM` drains in-flight work and flushes
+  results; nothing already scraped is lost.
+
+---
+
+## Setup
+
+Prerequisites: **Go 1.23+** (the build uses a recent toolchain; CI builds on the
+latest stable Go).
 
 ```sh
-# Build
+git clone https://github.com/ArfaMujahid/scraper.git
+cd scraper
 go build -o scraper ./cmd/scraper
-
-# Headless — one scrape job, prints a summary, exits
-./scraper --seeds=https://example.com --depth=1 --select price=.price
-
-# UI — embedded live dashboard at http://127.0.0.1:8080
-./scraper --ui
 ```
 
-## Modes
+That produces a single self-contained `./scraper` binary (the dashboard assets
+are embedded). Optionally install the dev tools used by the quality gate:
 
-**Headless** crawls from the seeds, streams results to a file, prints a summary,
-and exits (cron-friendly). **UI** starts an HTTP server; each browser gets an
-anonymous session cookie, can start a scrape, and watches live worker count,
-pages/sec, errors, and progress over Server-Sent Events — seeing only its own
-jobs.
+```sh
+make tools   # goimports, govulncheck, golangci-lint
+```
 
-Output is isolated per job: `data/scrapes/{owner}/{job-id}_{timestamp}.{jsonl,csv}`.
-In headless mode the owner is `--owner` (default `local`); in UI mode it's the
-session id from the cookie.
+---
+
+## Running
+
+### Headless (one job, then exit)
+
+```sh
+# Scrape one site two levels deep, capture a CSS field, write JSONL
+./scraper --seeds=https://example.com --depth=2 --select price=.price
+
+# Multiple seeds + fields, CSV output
+./scraper --seeds=https://a.com,https://b.com \
+  --select title=h1 --select price=.price --format=csv
+```
+
+On completion it prints a summary (pages scraped, errors, elapsed, throughput,
+output path) and writes results to
+`data/scrapes/{owner}/{job-id}_{timestamp}.{jsonl,csv}`.
+
+### UI (live dashboard)
+
+```sh
+./scraper --ui
+# open http://127.0.0.1:8080
+```
+
+In the browser: paste seed URLs (one per line), click **Start scrape**, and
+watch live —
+
+- **metrics**: pages done, in-flight, errors, pages/sec, KB, elapsed;
+- **scraped content**: a feed of each page as it's fetched (status, title, URL);
+- **your jobs**: the list of scrapes from your session.
+
+Each browser gets an anonymous session cookie and sees only its own jobs — open
+a second browser (or incognito window) to see two isolated users at once. The
+crawl parameters (depth, workers, rate, `max-pages`, selectors) come from the
+flags the server was started with; the UI just submits seeds.
+
+---
 
 ## Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--seeds` | – | comma-separated seed URLs (or pass as positional args) |
+| `--seeds` | – | comma-separated seed URLs (or positional args) |
 | `--depth` | 2 | max crawl depth (0 = seeds only) |
+| `--max-pages` | 10 | max pages to fetch per job (0 = unlimited) |
 | `--workers` | 10 | concurrent workers (bounded pool) |
 | `--rate` | 1 | max requests/sec per host |
 | `--timeout` | 30s | per-request timeout |
@@ -54,14 +106,9 @@ session id from the cookie.
 | `--retention` | 168h | delete completed jobs older than this (UI janitor) |
 | `--sweep-interval` | 1h | how often the janitor runs (UI) |
 
-Example:
+---
 
-```sh
-./scraper --seeds=https://example.com --depth=2 --workers=8 --rate=5 \
-  --select title=h1 --select price=.price --format=csv
-```
-
-## Architecture
+## How it works
 
 `cmd/scraper` is the composition root; all logic lives in `internal/`, organized
 by domain:
@@ -70,7 +117,7 @@ by domain:
 |---------|----------------|
 | `config` | tunables + fail-fast validation |
 | `job` | `Job`/`OwnerID`/`ID`, isolated output-path scheme |
-| `fetcher` | HTTP client: timeout, retries+backoff, body cap |
+| `fetcher` | HTTP client: timeout, retries + backoff, body cap |
 | `parser` | HTML → links + CSS-selector data (pure) |
 | `ratelimit` | per-host token bucket + robots.txt cache |
 | `output` | streaming JSONL/CSV writers |
@@ -79,11 +126,26 @@ by domain:
 | `registry` | in-memory live-job store (RWMutex) |
 | `cleanup` | retention janitor |
 | `web` | session, server, SSE, embedded dashboard |
-| `model` | shared `Result` type (leaf package) |
+| `model` | shared `Result`/`Event` types (leaf package) |
 
-The crawler emits progress on a channel, so the same engine drives the CLI and
-the dashboard. See `scraper-architecture.md` (the what/why),
-`implementation-design.md` (the low-level design), and `coding-standards.md`.
+**The engine.** A coordinator goroutine owns the frontier, the visited set, and
+the page counters, so deduplication needs no lock. It feeds a bounded pool of
+worker goroutines; each worker waits for a rate-limit token, fetches, parses,
+and reports discovered links back. Results stream to a single writer goroutine
+(no file lock needed), and progress events fan out on a channel — the same
+engine drives both the CLI summary and the dashboard's live feed.
+
+**How traps terminate.** Cycles are bounded by the visited set (each URL fetched
+once); infinitely deep chains by `--depth`; and infinite *distinct-URL* spaces
+(calendars, pagination, faceted search) by `--max-pages`. So a crawl always
+terminates.
+
+**Output.** JSON Lines (one object per line) is the default — streamable and
+partial-file-safe. CSV is also supported. Output is partitioned per owner and
+per job, so concurrent users (or runs) never share or corrupt a file.
+
+See `scraper-architecture.md` (the what/why), `implementation-design.md` (the
+low-level design), and `coding-standards.md` (how the code is written).
 
 ## Identity & auth (v1)
 
@@ -93,10 +155,11 @@ anonymous session UUID stored in an `HttpOnly` cookie; isolation is
 bearer token). The `OwnerID` abstraction is the seam where real auth slots in
 for v2.
 
+---
+
 ## Development
 
 ```sh
-make tools   # install goimports, govulncheck, golangci-lint (once)
 make check   # gofmt, goimports, vet, golangci-lint, govulncheck, build, test -race
 make help    # list all targets
 ```
@@ -110,5 +173,5 @@ docker build -t scraper .
 docker run --rm -p 8080:8080 -v "$PWD/data:/home/nonroot/data" scraper
 ```
 
-The image is a multi-stage build on a distroless static base (a few MB,
-`CGO_ENABLED=0`), with the dashboard assets embedded in the binary.
+A multi-stage build on a distroless static base (a few MB, `CGO_ENABLED=0`) with
+the dashboard assets embedded in the binary.
