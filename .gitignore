@@ -14,3 +14,8 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Raw capture originals (curated copies live in docs/)
+*.mov
+Screenshot*.png
+.playwright-mcp/
