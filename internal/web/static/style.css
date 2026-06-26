@@ -1,2 +1,116 @@
-/* TODO: professional dashboard styling — clean enough to show a client.
-   Clearly labeled live numbers, progress bar, URL feed. */
+:root {
+  --bg: #0f172a;
+  --panel: #1e293b;
+  --panel-2: #273449;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #38bdf8;
+  --green: #4ade80;
+  --red: #f87171;
+  --amber: #fbbf24;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+header {
+  padding: 2rem 1.5rem 1rem;
+  border-bottom: 1px solid var(--panel-2);
+}
+header h1 { margin: 0; font-size: 1.6rem; }
+header .sub { margin: .25rem 0 0; color: var(--muted); }
+
+main {
+  max-width: 880px;
+  margin: 1.5rem auto;
+  padding: 0 1.5rem;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-2);
+  border-radius: 12px;
+  padding: 1.25rem;
+}
+.panel h2 { margin: 0 0 .9rem; font-size: 1rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+
+label { display: block; font-size: .85rem; color: var(--muted); margin-bottom: .35rem; }
+textarea {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--panel-2);
+  border-radius: 8px;
+  padding: .6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+}
+button {
+  margin-top: .75rem;
+  background: var(--accent);
+  color: #04263a;
+  border: 0;
+  border-radius: 8px;
+  padding: .55rem 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:disabled { opacity: .5; cursor: not-allowed; }
+.msg { margin-left: .75rem; color: var(--muted); font-size: .85rem; }
+
+.status {
+  display: inline-block;
+  padding: .25rem .7rem;
+  border-radius: 999px;
+  font-size: .8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: 1rem;
+}
+.status.idle    { background: var(--panel-2); color: var(--muted); }
+.status.running { background: rgba(56,189,248,.15); color: var(--accent); }
+.status.done    { background: rgba(74,222,128,.15); color: var(--green); }
+.status.failed  { background: rgba(248,113,113,.15); color: var(--red); }
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: .75rem;
+}
+.metric {
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: .8rem;
+  text-align: center;
+}
+.metric .num { display: block; font-size: 1.6rem; font-weight: 700; }
+.metric .lbl { display: block; font-size: .75rem; color: var(--muted); margin-top: .15rem; }
+
+.jobs { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.jobs li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: .75rem;
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: .55rem .8rem;
+  font-size: .85rem;
+}
+.jobs li.empty { color: var(--muted); justify-content: center; }
+.jobs .seed { font-family: ui-monospace, monospace; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jobs .badge { font-size: .72rem; padding: .15rem .55rem; border-radius: 999px; font-weight: 600; }
+.badge.running { background: rgba(56,189,248,.15); color: var(--accent); }
+.badge.done    { background: rgba(74,222,128,.15); color: var(--green); }
+.badge.failed  { background: rgba(248,113,113,.15); color: var(--red); }
+.badge.queued  { background: rgba(251,191,36,.15); color: var(--amber); }

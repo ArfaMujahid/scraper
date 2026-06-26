@@ -10,19 +10,23 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/ArfaMujahid/scraper/internal/cleanup"
 	"github.com/ArfaMujahid/scraper/internal/config"
 	"github.com/ArfaMujahid/scraper/internal/crawler"
 	"github.com/ArfaMujahid/scraper/internal/fetcher"
 	"github.com/ArfaMujahid/scraper/internal/job"
 	"github.com/ArfaMujahid/scraper/internal/output"
 	"github.com/ArfaMujahid/scraper/internal/ratelimit"
+	"github.com/ArfaMujahid/scraper/internal/registry"
 	"github.com/ArfaMujahid/scraper/internal/stats"
+	"github.com/ArfaMujahid/scraper/internal/web"
 )
 
 // main runs the CLI and exits with the returned status code.
@@ -66,16 +70,15 @@ func run() int {
 		return 1
 	}
 
-	if cfg.UIEnabled {
-		logger.Error("ui mode is not implemented yet; run headless with --seeds")
-		return 1
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := runHeadless(ctx, cfg, logger); err != nil {
-		logger.Error("scrape failed", "err", err)
+	run := runHeadless
+	if cfg.UIEnabled {
+		run = runUI
+	}
+	if err := run(ctx, cfg, logger); err != nil {
+		logger.Error("scraper failed", "err", err)
 		return 1
 	}
 	return 0
@@ -120,6 +123,82 @@ func runHeadless(ctx context.Context, cfg config.Config, logger *slog.Logger) er
 	// A cancelled run (Ctrl-C / SIGTERM) is a graceful stop, not a failure.
 	if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, context.DeadlineExceeded) {
 		return runErr
+	}
+	return nil
+}
+
+// runUI starts the dashboard server plus the cleanup janitor, serving scrapes
+// for anonymous sessions until the context is cancelled, then shuts down
+// gracefully.
+func runUI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	f := fetcher.New(cfg.Timeout, cfg.Retries, cfg.UserAgent, cfg.MaxBodyBytes)
+	limiter := ratelimit.New(cfg.RatePerHost, cfg.RespectRobots, cfg.UserAgent, f)
+	reg := registry.New()
+
+	// Background janitor enforces retention on the scrapes directory.
+	go cleanup.New(job.ScrapesDir(cfg.DataDir), cfg.Retention, cfg.SweepInterval, reg, logger).Run(ctx)
+
+	// startJob launches one crawl per request on the server-lifetime context, so
+	// a finished HTTP request never cancels its scrape. web stays free of any
+	// crawler import via this closure.
+	startJob := func(owner job.OwnerID, seeds []string) (*job.Job, *stats.Stats) {
+		j := job.New(owner, seeds, cfg.DataDir, cfg.Format)
+		st := stats.New()
+		reg.Add(j)
+		reg.SetRunning(j.Owner, j.ID)
+
+		go func() {
+			w, file, err := output.NewForJob(j, cfg.Format)
+			if err != nil {
+				logger.Error("ui: opening output", "job", j.ID, "err", err)
+				reg.SetFailed(j.Owner, j.ID, err)
+				return
+			}
+			defer func() {
+				_ = w.Close()
+				_ = file.Close()
+			}()
+
+			cr := crawler.New(crawler.Config{
+				Workers:   cfg.Workers,
+				MaxDepth:  cfg.MaxDepth,
+				Selectors: cfg.Selectors,
+			}, f, limiter, w, st, nil)
+
+			if err := cr.Run(ctx, seeds); err != nil && !errors.Is(err, context.Canceled) {
+				reg.SetFailed(j.Owner, j.ID, err)
+				return
+			}
+			reg.SetDone(j.Owner, j.ID)
+		}()
+
+		return j, st
+	}
+
+	srv := &http.Server{
+		Addr:              cfg.UIAddr,
+		Handler:           web.New(reg, startJob, cfg.Retention, logger).Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		// WriteTimeout stays modest for normal requests; the SSE handler disables
+		// its own write deadline via http.ResponseController.
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Graceful shutdown when the signal context is cancelled.
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			logger.Error("ui: shutdown", "err", err)
+		}
+	}()
+
+	logger.Info("dashboard listening", "addr", cfg.UIAddr, "data_dir", cfg.DataDir)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("serving dashboard: %w", err)
 	}
 	return nil
 }
