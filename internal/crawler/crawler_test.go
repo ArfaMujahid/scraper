@@ -53,7 +53,7 @@ func (w *fakeWriter) all() []model.Result {
 func link(href string) string { return `<a href="` + href + `">x</a>` }
 
 // newCrawler wires a crawler with a real (but unthrottled, robots-off) limiter.
-func newCrawler(t *testing.T, cfg Config, f *fakeFetcher, w *fakeWriter, events chan<- Event) *Crawler {
+func newCrawler(t *testing.T, cfg Config, f *fakeFetcher, w *fakeWriter, events chan<- model.Event) *Crawler {
 	t.Helper()
 	lim := ratelimit.New(1e6, false, "test", f)
 	return New(cfg, f, lim, w, stats.New(), events)
@@ -187,7 +187,7 @@ func TestCrawlEmitsEvents(t *testing.T) {
 		"http://site/a":    "",
 	}}
 	w := &fakeWriter{}
-	events := make(chan Event, 100)
+	events := make(chan model.Event, 100)
 	c := newCrawler(t, Config{Workers: 2, MaxDepth: 1}, f, w, events)
 	if err := c.Run(context.Background(), []string{"http://site/seed"}); err != nil {
 		t.Fatal(err)
@@ -196,13 +196,65 @@ func TestCrawlEmitsEvents(t *testing.T) {
 
 	var done int
 	for ev := range events {
-		if ev.Type == EventPageDone {
+		if ev.Type == model.EventPageDone {
 			done++
 		}
 	}
 	if done != 2 {
 		t.Errorf("expected 2 PageDone events, got %d", done)
 	}
+}
+
+func TestCrawlRespectsMaxPages(t *testing.T) {
+	// A trap: every page links to two fresh, distinct URLs forever.
+	f := &fakeFetcher{pages: trapPages(200)}
+	w := &fakeWriter{}
+	c := newCrawler(t, Config{Workers: 4, MaxDepth: 100, MaxPages: 10}, f, w, nil)
+	if err := c.Run(context.Background(), []string{"http://trap/0"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(w.all()); n != 10 {
+		t.Errorf("MaxPages=10 should fetch exactly 10 pages, got %d", n)
+	}
+}
+
+func TestCrawlMaxPagesZeroIsUnlimited(t *testing.T) {
+	f := &fakeFetcher{pages: map[string]string{
+		"http://site/seed": link("http://site/a") + link("http://site/b"),
+		"http://site/a":    "",
+		"http://site/b":    "",
+	}}
+	w := &fakeWriter{}
+	c := newCrawler(t, Config{Workers: 3, MaxDepth: 5, MaxPages: 0}, f, w, nil)
+	if err := c.Run(context.Background(), []string{"http://site/seed"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(w.all()); n != 3 {
+		t.Errorf("MaxPages=0 (unlimited) should fetch all 3 pages, got %d", n)
+	}
+}
+
+// trapPages builds n pages where page i links to two distinct deeper pages, a
+// stand-in for an infinite-link trap.
+func trapPages(n int) map[string]string {
+	pages := make(map[string]string, n)
+	for i := 0; i < n; i++ {
+		base := "http://trap/"
+		pages[base+itoa(i)] = link(base+itoa(2*i+1)) + link(base+itoa(2*i+2))
+	}
+	return pages
+}
+
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b []byte
+	for i > 0 {
+		b = append([]byte{byte('0' + i%10)}, b...)
+		i /= 10
+	}
+	return string(b)
 }
 
 func TestCrawlEmptySeeds(t *testing.T) {

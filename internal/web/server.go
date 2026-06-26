@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ArfaMujahid/scraper/internal/job"
+	"github.com/ArfaMujahid/scraper/internal/model"
 	"github.com/ArfaMujahid/scraper/internal/registry"
 	"github.com/ArfaMujahid/scraper/internal/stats"
 )
@@ -21,11 +22,15 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-// StartJobFunc creates and launches a scrape for owner, returning the new job
-// and its live stats. It is injected by main so web doesn't import crawler; the
-// crawl runs on a server-lifetime context captured by the closure, not the
-// request context.
-type StartJobFunc func(owner job.OwnerID, seeds []string) (*job.Job, *stats.Stats)
+// StartJobFunc creates and launches a scrape for owner, returning the new job,
+// its live stats, and a channel of progress events (closed when the crawl
+// finishes). It is injected by main so web doesn't import crawler; the crawl
+// runs on a server-lifetime context captured by the closure, not the request
+// context.
+type StartJobFunc func(owner job.OwnerID, seeds []string) (*job.Job, *stats.Stats, <-chan model.Event)
+
+// feedFrameLimit caps how many recent scraped items each SSE frame carries.
+const feedFrameLimit = 50
 
 // Server serves the dashboard, manages sessions, starts jobs, and streams SSE.
 type Server struct {
@@ -34,8 +39,9 @@ type Server struct {
 	cookieTTL time.Duration
 	logger    *slog.Logger
 
-	mu   sync.RWMutex            // guards live
-	live map[job.ID]*stats.Stats // live job stats, for SSE lookup by id
+	mu    sync.RWMutex            // guards live and feeds
+	live  map[job.ID]*stats.Stats // live job stats, for SSE lookup by id
+	feeds map[job.ID]*feed        // recent scraped items per job, for the UI feed
 }
 
 // New builds a Server. cookieTTL sets the session cookie lifetime (≈ retention).
@@ -49,6 +55,7 @@ func New(reg *registry.Registry, startJob StartJobFunc, cookieTTL time.Duration,
 		cookieTTL: cookieTTL,
 		logger:    logger,
 		live:      make(map[job.ID]*stats.Stats),
+		feeds:     make(map[job.ID]*feed),
 	}
 }
 
@@ -96,10 +103,13 @@ func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	j, st := s.startJob(owner, seeds)
+	j, st, events := s.startJob(owner, seeds)
+	f := &feed{}
 	s.mu.Lock()
 	s.live[j.ID] = st
+	s.feeds[j.ID] = f
 	s.mu.Unlock()
+	go consumeEvents(f, events) // drains until the crawl closes the channel
 
 	s.writeJSON(w, map[string]string{"job": string(j.ID)})
 }
@@ -135,13 +145,14 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 // eventFrame is one SSE payload: job status plus a stats snapshot, in the wire
 // shape the dashboard consumes (decoupled from stats.Snapshot).
 type eventFrame struct {
-	Status      string  `json:"status"`
-	Done        int64   `json:"done"`
-	Errors      int64   `json:"errors"`
-	InFlight    int64   `json:"in_flight"`
-	Bytes       int64   `json:"bytes"`
-	PagesPerSec float64 `json:"pages_per_sec"`
-	ElapsedMs   int64   `json:"elapsed_ms"`
+	Status      string     `json:"status"`
+	Done        int64      `json:"done"`
+	Errors      int64      `json:"errors"`
+	InFlight    int64      `json:"in_flight"`
+	Bytes       int64      `json:"bytes"`
+	PagesPerSec float64    `json:"pages_per_sec"`
+	ElapsedMs   int64      `json:"elapsed_ms"`
+	Results     []feedItem `json:"results"` // most-recent-first scraped items
 }
 
 // handleEvents streams a job's live stats to the browser as Server-Sent Events
@@ -203,6 +214,9 @@ func (s *Server) sendFrame(w http.ResponseWriter, flusher http.Flusher, owner jo
 		frame.PagesPerSec = snap.PagesPerSec
 		frame.ElapsedMs = snap.Elapsed.Milliseconds()
 	}
+	if f := s.feedFor(id); f != nil {
+		frame.Results = f.recent(feedFrameLimit)
+	}
 	finished := false
 	if j, ok := s.registry.Get(owner, id); ok {
 		frame.Status = j.Status.String()
@@ -224,6 +238,69 @@ func (s *Server) statsFor(id job.ID) *stats.Stats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.live[id]
+}
+
+// feedFor returns the scraped-content feed for a job id, or nil if not tracked.
+func (s *Server) feedFor(id job.ID) *feed {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.feeds[id]
+}
+
+// feedItem is one scraped page as shown in the dashboard's content feed.
+type feedItem struct {
+	URL    string `json:"url"`
+	Title  string `json:"title,omitempty"`
+	Status int    `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+// feedCap bounds how many recent items a feed retains.
+const feedCap = 200
+
+// feed is a per-job ring buffer of recently scraped items, safe for concurrent
+// append (the consumer goroutine) and read (the SSE handler).
+type feed struct {
+	mu    sync.Mutex
+	items []feedItem
+}
+
+// add appends an item, dropping the oldest once the cap is exceeded.
+func (f *feed) add(it feedItem) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.items = append(f.items, it)
+	if len(f.items) > feedCap {
+		f.items = f.items[len(f.items)-feedCap:]
+	}
+}
+
+// recent returns up to n most recent items, newest first.
+func (f *feed) recent(n int) []feedItem {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n > len(f.items) {
+		n = len(f.items)
+	}
+	out := make([]feedItem, 0, n)
+	for i := len(f.items) - 1; i >= len(f.items)-n; i-- {
+		out = append(out, f.items[i])
+	}
+	return out
+}
+
+// consumeEvents drains crawler events into the feed until the channel closes
+// (when the crawl finishes), so the goroutine never leaks.
+func consumeEvents(f *feed, events <-chan model.Event) {
+	for ev := range events {
+		it := feedItem{URL: ev.URL, Status: ev.StatusCode}
+		if ev.Type == model.EventPageError && ev.Err != nil {
+			it.Error = ev.Err.Error()
+		} else {
+			it.Title = ev.Title
+		}
+		f.add(it)
+	}
 }
 
 // writeJSON encodes v as a JSON response.

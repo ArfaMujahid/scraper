@@ -34,6 +34,7 @@ function streamJob(id) {
     $("m-rate").textContent = (f.pages_per_sec || 0).toFixed(1);
     $("m-bytes").textContent = Math.round((f.bytes || 0) / 1024);
     $("m-elapsed").textContent = ((f.elapsed_ms || 0) / 1000).toFixed(1);
+    renderFeed(f.results || []);
 
     if (f.status === "done" || f.status === "failed") {
       es.close();
@@ -42,6 +43,29 @@ function streamJob(id) {
     }
   };
   es.onerror = () => { es.close(); currentStream = null; };
+}
+
+// renderFeed paints the most-recent-first list of scraped pages.
+function renderFeed(items) {
+  const feed = $("feed");
+  $("feed-count").textContent = items.length ? `(${items.length})` : "";
+  if (!items.length) {
+    feed.innerHTML = '<li class="empty">Nothing scraped yet.</li>';
+    return;
+  }
+  feed.innerHTML = "";
+  for (const it of items) {
+    const li = document.createElement("li");
+    const ok = !it.error && it.status >= 200 && it.status < 400;
+    const mark = ok ? "ok" : "err";
+    const label = it.error ? it.error : (it.title || "(no title)");
+    li.className = "feed-item " + mark;
+    li.innerHTML =
+      `<span class="code ${mark}">${it.status || "ERR"}</span>` +
+      `<span class="ftitle">${escapeHtml(label)}</span>` +
+      `<span class="furl">${escapeHtml(it.url)}</span>`;
+    feed.appendChild(li);
+  }
 }
 
 // setStatus updates the status pill.
@@ -92,6 +116,8 @@ document.addEventListener("DOMContentLoaded", () => {
     btn.disabled = true;
     msg.textContent = "Starting…";
     try {
+      renderFeed([]);
+      ["m-done", "m-inflight", "m-errors"].forEach((k) => ($(k).textContent = "0"));
       const id = await startScrape(seeds);
       msg.textContent = "Started.";
       streamJob(id);
