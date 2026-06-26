@@ -1,3 +1,105 @@
-// TODO: ~100 lines, no framework.
-// Open EventSource('/events') and update counters, progress bar, throughput,
-// and a scrolling feed of scraped URLs as events arrive.
+// Dashboard client: start a scrape, stream its live stats over SSE, and keep the
+// job list fresh. No framework — just fetch + EventSource + DOM updates.
+
+const $ = (id) => document.getElementById(id);
+let currentStream = null;
+
+// startScrape posts the seeds and begins streaming the new job's progress.
+async function startScrape(seeds) {
+  const res = await fetch("/api/scrape", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ seeds }),
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || res.statusText);
+  }
+  const { job } = await res.json();
+  return job;
+}
+
+// streamJob opens an SSE connection and updates the live metrics until the job
+// finishes, then refreshes the job list.
+function streamJob(id) {
+  if (currentStream) currentStream.close();
+  const es = new EventSource("/api/events?job=" + encodeURIComponent(id));
+  currentStream = es;
+
+  es.onmessage = (e) => {
+    const f = JSON.parse(e.data);
+    setStatus(f.status);
+    $("m-done").textContent = f.done;
+    $("m-inflight").textContent = f.in_flight;
+    $("m-errors").textContent = f.errors;
+    $("m-rate").textContent = (f.pages_per_sec || 0).toFixed(1);
+    $("m-bytes").textContent = Math.round((f.bytes || 0) / 1024);
+    $("m-elapsed").textContent = ((f.elapsed_ms || 0) / 1000).toFixed(1);
+
+    if (f.status === "done" || f.status === "failed") {
+      es.close();
+      currentStream = null;
+      refreshJobs();
+    }
+  };
+  es.onerror = () => { es.close(); currentStream = null; };
+}
+
+// setStatus updates the status pill.
+function setStatus(status) {
+  const el = $("live-status");
+  el.textContent = status;
+  el.className = "status " + (["running", "done", "failed"].includes(status) ? status : "idle");
+}
+
+// refreshJobs re-renders the owner's job list.
+async function refreshJobs() {
+  const res = await fetch("/api/jobs");
+  if (!res.ok) return;
+  const jobs = await res.json();
+  const list = $("job-list");
+  list.innerHTML = "";
+  if (!jobs.length) {
+    list.innerHTML = '<li class="empty">No jobs yet.</li>';
+    return;
+  }
+  for (const j of jobs) {
+    const li = document.createElement("li");
+    const seed = (j.seeds && j.seeds[0]) || j.id;
+    const more = j.seeds && j.seeds.length > 1 ? ` (+${j.seeds.length - 1})` : "";
+    li.innerHTML =
+      `<span class="seed" title="${j.id}">${escapeHtml(seed)}${more}</span>` +
+      `<span class="badge ${j.status}">${j.status}</span>`;
+    list.appendChild(li);
+  }
+}
+
+// escapeHtml prevents scraped/seed text from injecting markup.
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  refreshJobs();
+  $("scrape-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const seeds = $("seeds").value.split("\n").map((s) => s.trim()).filter(Boolean);
+    const msg = $("form-msg");
+    if (!seeds.length) { msg.textContent = "Enter at least one URL."; return; }
+
+    const btn = $("start-btn");
+    btn.disabled = true;
+    msg.textContent = "Starting…";
+    try {
+      const id = await startScrape(seeds);
+      msg.textContent = "Started.";
+      streamJob(id);
+      refreshJobs();
+    } catch (err) {
+      msg.textContent = "Error: " + err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+});

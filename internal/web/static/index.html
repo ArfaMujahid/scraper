@@ -3,15 +3,45 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Scraper Dashboard</title>
+  <title>Concurrent Web Scraper</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <!-- TODO: dashboard markup — start-scrape form, live counters,
-       progress bar, throughput, scrolling URL feed. -->
-  <main>
+  <header>
     <h1>Concurrent Web Scraper</h1>
+    <p class="sub">Live dashboard — start a scrape and watch Go's worker pool chew through the queue.</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Start a scrape</h2>
+      <form id="scrape-form">
+        <label for="seeds">Seed URLs (one per line)</label>
+        <textarea id="seeds" name="seeds" rows="3" placeholder="https://example.com"></textarea>
+        <button type="submit" id="start-btn">Start scrape</button>
+        <span id="form-msg" class="msg"></span>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Live progress</h2>
+      <div id="live-status" class="status idle">idle</div>
+      <div class="metrics">
+        <div class="metric"><span class="num" id="m-done">0</span><span class="lbl">pages done</span></div>
+        <div class="metric"><span class="num" id="m-inflight">0</span><span class="lbl">in flight</span></div>
+        <div class="metric"><span class="num" id="m-errors">0</span><span class="lbl">errors</span></div>
+        <div class="metric"><span class="num" id="m-rate">0.0</span><span class="lbl">pages/sec</span></div>
+        <div class="metric"><span class="num" id="m-bytes">0</span><span class="lbl">KB</span></div>
+        <div class="metric"><span class="num" id="m-elapsed">0.0</span><span class="lbl">seconds</span></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Your jobs</h2>
+      <ul id="job-list" class="jobs"><li class="empty">No jobs yet.</li></ul>
+    </section>
   </main>
+
   <script src="/static/app.js"></script>
 </body>
 </html>
