@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -24,10 +25,10 @@ var staticFS embed.FS
 
 // StartJobFunc creates and launches a scrape for owner, returning the new job,
 // its live stats, and a channel of progress events (closed when the crawl
-// finishes). It is injected by main so web doesn't import crawler; the crawl
-// runs on a server-lifetime context captured by the closure, not the request
-// context.
-type StartJobFunc func(owner job.OwnerID, seeds []string) (*job.Job, *stats.Stats, <-chan model.Event)
+// finishes). maxPages overrides the server default when > 0. It is injected by
+// main so web doesn't import crawler; the crawl runs on a server-lifetime
+// context captured by the closure, not the request context.
+type StartJobFunc func(owner job.OwnerID, seeds []string, maxPages int) (*job.Job, *stats.Stats, <-chan model.Event)
 
 // feedFrameLimit caps how many recent scraped items each SSE frame carries.
 const feedFrameLimit = 50
@@ -68,6 +69,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/scrape", s.handleScrape)
 	mux.HandleFunc("GET /api/jobs", s.handleJobs)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
+	mux.HandleFunc("GET /api/download", s.handleDownload)
 	return s.withSession(mux)
 }
 
@@ -84,7 +86,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 
 // scrapeRequest is the POST /api/scrape body.
 type scrapeRequest struct {
-	Seeds []string `json:"seeds"`
+	Seeds    []string `json:"seeds"`
+	MaxPages int      `json:"max_pages"` // 0 = use the server default
 }
 
 // handleScrape starts a scrape for the session owner and returns the job id.
@@ -103,7 +106,7 @@ func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	j, st, events := s.startJob(owner, seeds)
+	j, st, events := s.startJob(owner, seeds, req.MaxPages)
 	f := &feed{}
 	s.mu.Lock()
 	s.live[j.ID] = st
@@ -140,6 +143,25 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	s.writeJSON(w, out)
+}
+
+// handleDownload serves the owner's job output file as an attachment. The path
+// comes from the registry (server-generated, owner-sanitized), never from user
+// input, and the owner check enforces isolation.
+func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	owner := ownerFrom(r.Context())
+	id := job.ID(r.URL.Query().Get("job"))
+	if id == "" {
+		http.Error(w, "missing job parameter", http.StatusBadRequest)
+		return
+	}
+	j, ok := s.registry.Get(owner, id)
+	if !ok {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(j.OutputPath)+`"`)
+	http.ServeFile(w, r, j.OutputPath)
 }
 
 // eventFrame is one SSE payload: job status plus a stats snapshot, in the wire

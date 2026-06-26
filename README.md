@@ -69,17 +69,19 @@ output path) and writes results to
 # open http://127.0.0.1:8080
 ```
 
-In the browser: paste seed URLs (one per line), click **Start scrape**, and
-watch live —
+In the browser: paste seed URLs (one per line), optionally set **Max pages**
+for that scrape, click **Start scrape**, and watch live —
 
 - **metrics**: pages done, in-flight, errors, pages/sec, KB, elapsed;
 - **scraped content**: a feed of each page as it's fetched (status, title, URL);
-- **your jobs**: the list of scrapes from your session.
+- **your jobs**: the list of scrapes from your session;
+- when a job finishes, a **Download results** button serves its full output file.
 
-Each browser gets an anonymous session cookie and sees only its own jobs — open
-a second browser (or incognito window) to see two isolated users at once. The
-crawl parameters (depth, workers, rate, `max-pages`, selectors) come from the
-flags the server was started with; the UI just submits seeds.
+Each browser gets an anonymous session cookie and sees (and downloads) only its
+own jobs — open a second browser (or incognito window) to see two isolated users
+at once. **Max pages** is the one parameter overridable per scrape from the UI
+(blank uses the server default; the UI never enables an unbounded crawl); the
+rest (depth, workers, rate, selectors) come from the server's startup flags.
 
 ---
 

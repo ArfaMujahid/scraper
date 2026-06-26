@@ -18,6 +18,8 @@
       <form id="scrape-form">
         <label for="seeds">Seed URLs (one per line)</label>
         <textarea id="seeds" name="seeds" rows="3" placeholder="https://example.com"></textarea>
+        <label for="max-pages">Max pages <span class="hint">(blank = server default)</span></label>
+        <input type="number" id="max-pages" name="max-pages" min="1" placeholder="10" />
         <button type="submit" id="start-btn">Start scrape</button>
         <span id="form-msg" class="msg"></span>
       </form>
@@ -25,7 +27,10 @@
 
     <section class="panel">
       <h2>Live progress</h2>
-      <div id="live-status" class="status idle">idle</div>
+      <div class="status-row">
+        <span id="live-status" class="status idle">idle</span>
+        <a id="download" class="download" href="#" hidden download>⬇ Download results</a>
+      </div>
       <div class="metrics">
         <div class="metric"><span class="num" id="m-done">0</span><span class="lbl">pages done</span></div>
         <div class="metric"><span class="num" id="m-inflight">0</span><span class="lbl">in flight</span></div>

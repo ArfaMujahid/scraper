@@ -144,7 +144,13 @@ func runUI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// startJob launches one crawl per request on the server-lifetime context, so
 	// a finished HTTP request never cancels its scrape. web stays free of any
 	// crawler import via this closure.
-	startJob := func(owner job.OwnerID, seeds []string) (*job.Job, *stats.Stats, <-chan model.Event) {
+	startJob := func(owner job.OwnerID, seeds []string, maxPages int) (*job.Job, *stats.Stats, <-chan model.Event) {
+		// A positive request value overrides the server default; otherwise the
+		// configured cap applies (the UI never enables an unbounded crawl).
+		pages := cfg.MaxPages
+		if maxPages > 0 {
+			pages = maxPages
+		}
 		j := job.New(owner, seeds, cfg.DataDir, cfg.Format)
 		st := stats.New()
 		events := make(chan model.Event, 256)
@@ -167,7 +173,7 @@ func runUI(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			cr := crawler.New(crawler.Config{
 				Workers:   cfg.Workers,
 				MaxDepth:  cfg.MaxDepth,
-				MaxPages:  cfg.MaxPages,
+				MaxPages:  pages,
 				Selectors: cfg.Selectors,
 			}, f, limiter, w, st, events)
 
