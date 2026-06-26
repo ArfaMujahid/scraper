@@ -4,12 +4,12 @@
 const $ = (id) => document.getElementById(id);
 let currentStream = null;
 
-// startScrape posts the seeds and begins streaming the new job's progress.
-async function startScrape(seeds) {
+// startScrape posts the seeds (and optional max-pages) and returns the job id.
+async function startScrape(seeds, maxPages) {
   const res = await fetch("/api/scrape", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ seeds }),
+    body: JSON.stringify({ seeds, max_pages: maxPages || 0 }),
   });
   if (!res.ok) {
     throw new Error((await res.text()) || res.statusText);
@@ -39,6 +39,9 @@ function streamJob(id) {
     if (f.status === "done" || f.status === "failed") {
       es.close();
       currentStream = null;
+      const dl = $("download");
+      dl.href = "/api/download?job=" + encodeURIComponent(id);
+      dl.hidden = false;
       refreshJobs();
     }
   };
@@ -109,6 +112,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("scrape-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const seeds = $("seeds").value.split("\n").map((s) => s.trim()).filter(Boolean);
+    const maxPages = parseInt($("max-pages").value, 10) || 0;
     const msg = $("form-msg");
     if (!seeds.length) { msg.textContent = "Enter at least one URL."; return; }
 
@@ -117,8 +121,9 @@ document.addEventListener("DOMContentLoaded", () => {
     msg.textContent = "Starting…";
     try {
       renderFeed([]);
+      $("download").hidden = true;
       ["m-done", "m-inflight", "m-errors"].forEach((k) => ($(k).textContent = "0"));
-      const id = await startScrape(seeds);
+      const id = await startScrape(seeds, maxPages);
       msg.textContent = "Started.";
       streamJob(id);
       refreshJobs();
