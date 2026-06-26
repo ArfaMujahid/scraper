@@ -88,13 +88,25 @@ func New(owner OwnerID, seeds []string, dataDir, format string) *Job {
 	}
 }
 
+// ScrapesDir returns the root directory holding all job output under dataDir.
+// The cleanup janitor sweeps exactly this directory, so the path scheme has a
+// single source of truth here.
+func ScrapesDir(dataDir string) string {
+	return filepath.Join(dataDir, scrapesDir)
+}
+
+// OwnerDir returns the directory holding one owner's job output. The owner is
+// sanitized so untrusted input can never escape the data directory.
+func OwnerDir(dataDir string, owner OwnerID) string {
+	return filepath.Join(ScrapesDir(dataDir), sanitize(string(owner)))
+}
+
 // outputPath returns data/scrapes/{owner}/{id}_{ts}.{ext}, the file this job
-// (and only this job) writes to. The owner is sanitized so untrusted input can
-// never escape the data directory.
+// (and only this job) writes to.
 func outputPath(dataDir string, owner OwnerID, id ID, format string) string {
 	ts := time.Now().UTC().Format(tsLayout)
 	name := fmt.Sprintf("%s_%s.%s", id, ts, format)
-	return filepath.Join(dataDir, scrapesDir, sanitize(string(owner)), name)
+	return filepath.Join(OwnerDir(dataDir, owner), name)
 }
 
 // sanitize maps any character outside [A-Za-z0-9_-] to '_', producing a single
